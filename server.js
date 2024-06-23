@@ -4,48 +4,155 @@ const fs = require('fs');
 const path = require('path');
 const fss = require('fs').promises;
 const axios = require('axios'); // Importe o axios aqui
-const clientId = 'YOUR_TWITCH_CLIENT_ID'; // Replace this with your Twitch Client ID
-const accessToken = 'YOUR_TWITCH_ACCESS_TOKEN'; // Replace this with your Twitch Access Token
+const CHATPATH = 'E:/video editing/Steam Alerts/ChatOverlay'; // Replace this with your Twitch Client ID
+const directoryPath = CHATPATH;
+const cheerio = require('cheerio');
+const puppeteer = require('puppeteer');
 
-
-// Serve static files from the specified directory
-const directoryPath = 'E:/video editing/Steam Alerts/ChatOverlay';
 app.use(express.static(directoryPath));
-
 app.get('/favicon.ico', (req, res) => {
-  // Just send a 404 response
   res.status(404).end();
 });
 
-function getEmoteUrl(emoteName){
-	var apiUrl = `https://api.twitch.tv/helix/chat/emotes?name=${encodeURIComponent(emoteName)}`;
+class Semaphore {
+    constructor(maxConcurrency) {
+        this.maxConcurrency = maxConcurrency;
+        this.currentConcurrency = 0;
+        this.queue = [];
+    }
 
-	fetch(apiUrl, {
-	  headers: {
-		'Client-ID': clientId,
-		'Authorization': `Bearer ${accessToken}`
-	  }
-	})
-	.then(response => {
-	  if (!response.ok) {
-		throw new Error('Network response was not ok');
-	  }
-	  return response.json();
-	})
-	.then(data => {
-	  if (data.data && data.data.length > 0) {
-		const emoteURL = data.data[0].url;
-		console.log(emoteURL); // This will log the direct URL of the emote image
-	  } else {
-		console.log('Emote not found');
-	  }
-	})
-	.catch(error => {
-	  console.error('There was a problem with the request:', error);
-	});
+    async acquire() {
+        if (this.currentConcurrency < this.maxConcurrency) {
+            this.currentConcurrency++;
+            return Promise.resolve();
+        } else {
+            return new Promise(resolve => this.queue.push(resolve));
+        }
+    }
+
+    release() {
+        if (this.queue.length > 0) {
+            const resolve = this.queue.shift();
+            resolve();
+        } else {
+            this.currentConcurrency--;
+        }
+    }
+
+    async withLock(fn) {
+        await this.acquire();
+        try {
+            await fn();
+        } finally {
+            this.release();
+        }
+    }
+}
+const semaphore = new Semaphore(2); // Limit to 2 concurrent requests
+
+async function findEmoteUrlAndSave(emoteName) {
+    const searchUrl = `https://twitch-tools.rootonline.de/emotes_search.php?q=${emoteName}&qc=1&qo=0&qt=0&page=1`;
+    const emotesFolder = path.join(__dirname, 'emotes');
+    const imagePath = path.join(emotesFolder, `${emoteName}.png`);
+    const imagePathGif = path.join(emotesFolder, `${emoteName}.gif`);
+
+    try {
+        if (fs.existsSync(imagePath)) {
+            return imagePath;
+        }
+        if (fs.existsSync(imagePathGif)) {
+            return imagePath;
+        }		
+
+        await semaphore.withLock(async () => {
+            const browser = await puppeteer.launch();
+            const page = await browser.newPage();
+            await page.goto(searchUrl, { waitUntil: 'networkidle0' });
+
+            const emoteData = await page.evaluate(emoteName => {
+                const cardBody = document.querySelector('.card-body');
+                const emoteNameTag = cardBody.querySelector('.mt-2.text-center');
+                const img = cardBody.querySelector('img');
+
+                if (emoteNameTag && img && emoteNameTag.textContent.trim() === emoteName) {
+                    return { imgUrl: img.src, emoteName: emoteNameTag.textContent.trim() };
+                } else {
+                    return null;
+                }
+            }, emoteName);
+
+            await browser.close();
+
+			if (emoteData) {
+				if (!fs.existsSync(emotesFolder)) {
+					fs.mkdirSync(emotesFolder);
+				}
+
+				const response = await axios.get(emoteData.imgUrl, { responseType: 'stream' });
+				const contentType = response.headers['content-type'];
+				const fileExtension = contentType.includes('gif') ? 'gif' : 'png';
+				const finalImagePath = path.join(emotesFolder, `${emoteData.emoteName}.${fileExtension}`);
+				const writer = fs.createWriteStream(finalImagePath);
+
+				response.data.pipe(writer);
+
+				await new Promise((resolve, reject) => {
+					writer.on('finish', resolve);
+					writer.on('error', reject);
+				});
+
+				return finalImagePath;
+			} else {
+				throw new Error(`No emote found for name: ${emoteName}`);
+			}
+			
+        });
+    } catch (error) {
+        console.error(`An error occurred: ${error.message}`);
+        return null;
+    }
 }
 
-// Function to read the file and return its contents
+// Function to process a list of words with concurrency control
+async function processWords(words) {
+    if (!Array.isArray(words)) {
+        throw new TypeError('Expected an array of words');
+    }
+    const promises = words.map(word => findEmoteUrlAndSave(word));
+    await Promise.all(promises);
+}
+
+
+
+// Function to find repeated words and process them
+function findRepeatedWords(frase) {
+    const words = frase.split(" ");
+    const wordFreq = {};
+	const emotesFolder = path.join(__dirname, 'emotes');
+	
+	returnedFrase = "";
+
+    for (const word of words) {			
+		imagePath = path.join(emotesFolder, `${word}.png`);
+		imagePathG = path.join(emotesFolder, `${word}.gif`);
+		if (fs.existsSync(imagePath)) {
+			returnedFrase += `<img class="emote-small" src="emotes/${word}.png">`;
+		} else if (fs.existsSync(imagePathG))  {
+			returnedFrase += `<img class="emote-small" src="emotes/${word}.gif">`;
+		} else{
+			returnedFrase+= word;
+			wordFreq[word] = (wordFreq[word] || 0) + 1;			
+		} 
+    }
+
+    const repeatedWords = Object.keys(wordFreq).filter(word => wordFreq[word] > 2);
+
+    processWords(repeatedWords);
+	
+	return returnedFrase;
+}
+
+
 function readTextFile(filePath) {
   return new Promise((resolve, reject) => {
     fs.readFile(filePath, 'utf8', (err, data) => {
@@ -61,7 +168,6 @@ function readTextFile(filePath) {
 async function readMemberNamesFromFile(filePath) {
   try {
     const data = await fss.readFile(filePath, 'utf8');
-    // Assuming each member name is on a separate line in the text file
     const memberNames = data.split('\n').map(name => name.trim());
     return memberNames;
   } catch (error) {
@@ -69,10 +175,9 @@ async function readMemberNamesFromFile(filePath) {
   }
 }
 
-// Modified function to get member names from a text file
 async function getMemberNamesFromFile() {
   try {
-    const filePath = 'E:/video editing/Steam Alerts/ChatOverlay/memberlist.txt'; // Update with the path to your text file
+    const filePath = CHATPATH + '/memberlist.txt';
     const memberNames = await readMemberNamesFromFile(filePath);
     return memberNames;
   } catch (error) {
@@ -80,25 +185,26 @@ async function getMemberNamesFromFile() {
   }
 }
 
-// Route to handle displaying messages
 app.get('/messages', async (req, res) => {
   try {
-    const data = await readTextFile('E:/video editing/Steam Alerts/ChatOverlay/ChatOverlay.txt');
+    const data = await readTextFile(CHATPATH + '/ChatOverlay.txt');
     const messages = [];
     const lines = data.split('\n');
 	var numberOfLines = lines.length;
-	var lastLines = Number(await readTextFile('E:/video editing/Steam Alerts/ChatOverlay/ChatLastLine.txt'));
+	var lastLines = Number(await readTextFile(CHATPATH + '/ChatLastLine.txt'));
 	let memberNames = [];
 	memberNames = await getMemberNamesFromFile();
 	
 	for (let i = (lines.length - 10); i < lines.length; i++) {
+//	for (let i = 0; i < lines.length; i++) {
+
 		
 		if (i > lastLines){
 			const line = lines[i];
 			
 			console.error('msg:', line);
 			
-			const [info1, info2, info3, info4, info5] = line.split(":%:").map(item => item.trim());
+			let [info1, info2, info3, info4, info5] = line.split(":%:").map(item => item.trim());
 			
 			if (info1 == null){
 				info1 == "";
@@ -119,7 +225,7 @@ app.get('/messages', async (req, res) => {
 			
 			
 			if (info1 == "Hololive Vtuber Legendada") {
-				continue; // Skip the iteration when i equals 5
+				continue;
 			}
 			
 			var typeChatter = ``;
@@ -134,6 +240,11 @@ app.get('/messages', async (req, res) => {
 					memberBadge = `<img class="icon-platform" src="imgs/unnamed (1).png">`;
 				}			
 			} else if (info4 == 1){
+				
+				info2 = findRepeatedWords(info2);
+				
+				
+				
 				if (memberNames.includes(info1)) {
 					isMemberChatter = `twitchMemberChatter`;
 					memberBadge = `<img class="icon-platform" src="imgs/unnamed (1).png">`;
@@ -142,9 +253,6 @@ app.get('/messages', async (req, res) => {
 				typeChatter = `twitchChatter`;				
 			}
 
-					
-
-			
 			const currentTime = new Date().toLocaleTimeString();
 			const messageHTML = `
 			  <div class="message-item">
@@ -163,7 +271,7 @@ app.get('/messages', async (req, res) => {
 			
 			lastLines = i;
 			try {
-				await fss.writeFile('E:/video editing/Steam Alerts/ChatOverlay/ChatLastLine.txt', lastLines.toString());
+				await fss.writeFile(CHATPATH + '/ChatLastLine.txt', lastLines.toString());
 			} catch (error) {
 				console.error("Error writing file:", error);
 			}
@@ -179,7 +287,6 @@ app.get('/messages', async (req, res) => {
   }
 });
 
-// Start the server
 const port = 3000;
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);

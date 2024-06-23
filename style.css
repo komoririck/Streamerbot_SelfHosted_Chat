@@ -250,7 +250,14 @@ html, body {
 			2px 2px 0 #fffff;
 }
 
+.emote-small{
+	height: 56px;
+	width: 56px;	
+}
+
 body {
    width:500px;
    background-color: #00b140;
 }
+
+
