@@ -1,14 +1,12 @@
-        // Function to continuously scroll to the bottom of the page
-        function scrollToEnd() {
-            window.scrollTo(0, document.body.scrollHeight);
-        }
+// Function to continuously scroll to the bottom of the page
+function scrollToEnd() {
+	window.scrollTo(0, document.body.scrollHeight);
+}
+scrollToEnd();
+var _autoScroller = setInterval(scrollToEnd, 100);
 
-        // Initial scroll to the bottom
-        scrollToEnd();
 
-        // Scroll to the bottom every 100 milliseconds
-        var _autoScroller = setInterval(scrollToEnd, 100);
-		
+//remove messages after x seconds	
 function removeOldMessages() {
     const chatMessagesDiv = document.querySelector('.chat-messages');
     const childDivs = chatMessagesDiv.querySelectorAll('div'); // Get all child divs
@@ -19,7 +17,7 @@ function removeOldMessages() {
         const divTime = div.dataset.timestamp ? parseInt(div.dataset.timestamp) : currentTime; // Parse timestamp to number
         const elapsedTime = currentTime - divTime; // Calculate time elapsed
 
-        if (elapsedTime > 60000) { // If more than 30 seconds have elapsed
+        if (elapsedTime > 60000) { // If more than 1 minute
             console.log("Removing div:", div);
             div.remove(); // Remove the div
         }
@@ -42,6 +40,15 @@ function handleMutations(mutationsList, observer) {
     });
 }
 
+
+function applyGlowEffect() {
+    const elements = document.querySelectorAll('.twitchMemberChatter');
+    elements.forEach(element => {
+        element.style.background = 'linear-gradient(to right, #ffffff, #FF0000)';
+        element.style.animation = 'glow 1s ease-in-out infinite alternate'; // Add glowing animation
+    });
+}
+
 // Create a MutationObserver to watch for changes in the chat-messages element
 const chatMessagesDiv = document.querySelector('.chat-messages');
 const observer = new MutationObserver(handleMutations);
@@ -49,4 +56,5 @@ observer.observe(chatMessagesDiv, { childList: true, subtree: true });
 
 // Call removeOldMessages function periodically (every second in this case)
 setInterval(removeOldMessages, 1000);
+setInterval(applyGlowEffect, 1000);
 
