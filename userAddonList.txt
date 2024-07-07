@@ -1,0 +1,2 @@
+RickKomori:*:textcolor:*:FFFFFF
+RickKomori:*:chatcolor:*:BF40BF
